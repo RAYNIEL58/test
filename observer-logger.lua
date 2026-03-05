@@ -203,8 +203,14 @@ end
 
 print("[Observer] Ready. Use the other script / game — output will appear here.")
 
--- Run Luarmor loader
+-- Run Luarmor loader. In executors (Synapse etc.) game:HttpGet exists. In real Roblox it does not;
+-- the loader may then error on line 1 ("attempt to call a nil value") unless run via an executor.
 pcall(function()
+	pcall(function()
+		if game and not game.HttpGet and game:GetService then
+			game.HttpGet = function(_, url) return game:GetService("HttpService"):GetAsync(url) end
+		end
+	end)
 	local code
 	if game and game.HttpGet then
 		code = game:HttpGet(LUARMOR_LOADER_URL)
