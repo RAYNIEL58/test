@@ -88,13 +88,6 @@ table.insert(getgenv().tvk,tvkdumb)
 Settings = SaveToTable(ReadSetting())
 repeat wait() until game:IsLoaded()
 
--- Grand Piece Online only
-local GPO_PLACE_ID = 1730877806
-if game.PlaceId ~= GPO_PLACE_ID then
-    plr:Kick("[CFA Hub] This script is for Grand Piece Online only.")
-    return
-end
-
 repeat wait(.25)
 until plr:FindFirstChild("Loaded")
 and plr.Loaded.Value == true
