@@ -21,9 +21,13 @@
 ==============================================================================
 ]]
 
--- First thing: show in injector console so you know the script ran (even if Discord fails)
-pcall(function() print("[OBSERVER] Script loading...") end)
-pcall(function() warn("[OBSERVER] If you see this, the observer started. Trying Discord next.") end)
+-- First thing: show in injector console (Delta may have print/warn as nil – don't call nil)
+local function say(msg, asWarn)
+	local fn = asWarn and warn or print
+	if type(fn) == "function" then pcall(fn, msg) end
+end
+say("[OBSERVER] Script loading...", false)
+say("[OBSERVER] If you see this, the observer started. Trying Discord next.", true)
 
 -- Your Discord webhook – observer sends debug logs here. Don't share or commit this URL.
 local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1479433171673022674/f3h7jy2fDUPElS5KUz_CDHwhUtYOx_hL3mh_t_x2CGqRmIETBJ8sCMY4eXbqWwXCkGMo"
@@ -91,9 +95,9 @@ end
 
 pcall(function()
 	if discordOk then
-		print("[OBSERVER] Discord ping sent. Check your webhook channel.")
+		say("[OBSERVER] Discord ping sent. Check your webhook channel.", false)
 	else
-		warn("[OBSERVER] Discord ping FAILED. For Delta: inject WHILE IN A GAME after it has loaded.")
+		say("[OBSERVER] Discord ping FAILED. For Delta: inject WHILE IN A GAME after it has loaded.", true)
 	end
 end)
 
@@ -155,7 +159,7 @@ end
 local function logAction(msg)
 	table.insert(actionLog, msg)
 	if #actionLog > MAX_LOG then table.remove(actionLog, 1) end
-	print("[OBSERVER] " .. msg)
+	say("[OBSERVER] " .. msg, false)
 end
 
 local function sendToDiscord(content, useEmbed)
@@ -411,8 +415,9 @@ pcall(function()
 	logAction("LogService.MessageOut hooked – console errors will be sent to Discord.")
 end)
 
--- Hook print, warn, error so script messages go to Discord (skipped if injector blocks global replace)
+-- Hook print, warn, error so script messages go to Discord (skipped if injector blocks or nil)
 pcall(function()
+	if type(print) ~= "function" or type(warn) ~= "function" or type(error) ~= "function" then return end
 	local orig_print = print
 	local orig_warn = warn
 	local orig_error = error
