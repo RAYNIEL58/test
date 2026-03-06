@@ -1,23 +1,24 @@
 --[[
 ==============================================================================
-  OBSERVER – watch the script you paste in the executor
+  REALTIME OBSERVER – see what the script is doing (prints, toggles, remotes, etc.)
 ==============================================================================
 
-  Why you might get banned:
-  (1) This observer hooks game's metatable (getrawmetatable, __namecall).
-      Anti-cheat can detect that and ban.
-  (2) The script you run might do bannable things (teleport, spam remotes, etc.).
-      The observer only LOGS what happens – it doesn't stop the game from seeing it.
+  Use: Run THIS observer first, then run the OTHER script (e.g. the one from
+  online). Your own script (e.g. archive/test.lua) is just your sample – the
+  observer watches whatever script you run after it.
 
-  This version keeps only essential hooks (FireServer, InvokeServer, Tween,
-  Teleport, Kick) to reduce detection. No extra hooks (GetService, Connect, etc.).
+  Logs to your Discord webhook:
+  - Script print/warn/error (e.g. "Auto farm activated", "Teleporting to player")
+  - FireServer / InvokeServer (remotes + args)
+  - Tween (dash) + Teleport (position)
+  - HTTP calls, Kick, BindableEvent
 
-  INJECT: Run observer first, then the script you want to observe.
-  Or set _G.FIRST_SCRIPT_SOURCE / readfile("first.lua") then run observer.
+  Run observer FIRST → then run the script you want to observe.
 ==============================================================================
 ]]
 
-local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1479152924402647231/rtgjUt8LjlCdNjhIAdJGY9xJGDffQuH37d3kdy9DOPTcYycCW9Cd1J-6lYafDFFDP6-K"
+-- Your Discord webhook – observer sends debug logs here. Don't share or commit this URL.
+local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1479433171673022674/f3h7jy2fDUPElS5KUz_CDHwhUtYOx_hL3mh_t_x2CGqRmIETBJ8sCMY4eXbqWwXCkGMo"
 
 local actionLog = {}
 local MAX_LOG = 20
@@ -45,6 +46,36 @@ local function formatArgs(...)
 	end
 	if #t > 8 then table.insert(parts, "...") end
 	return table.concat(parts, ", ")
+end
+
+-- Format CFrame or Vector3 for Discord (so you see exact teleport/dash target)
+local function formatCFrameOrVector(v)
+	if type(v) == "userdata" then
+		local ok, x, y, z = pcall(function()
+			if v.X and v.Y and v.Z then return v.X, v.Y, v.Z end -- Vector3
+			if v.Position then local p = v.Position return p.X, p.Y, p.Z end -- CFrame
+			return nil, nil, nil
+		end)
+		if ok and x then return ("%.2f, %.2f, %.2f"):format(x, y, z) end
+	end
+	return safeStr(v)
+end
+
+local function formatTweenGoals(propTable)
+	if type(propTable) ~= "table" then return "" end
+	local parts = {}
+	if propTable.CFrame then
+		table.insert(parts, "CFrame → " .. formatCFrameOrVector(propTable.CFrame))
+	end
+	if propTable.Position then
+		table.insert(parts, "Position → " .. formatCFrameOrVector(propTable.Position))
+	end
+	for k, v in pairs(propTable) do
+		if k ~= "CFrame" and k ~= "Position" and type(v) == "userdata" and (v.X or v.Position) then
+			table.insert(parts, tostring(k) .. " → " .. formatCFrameOrVector(v))
+		end
+	end
+	return #parts > 0 and table.concat(parts, " | ") or ""
 end
 
 local function logAction(msg)
@@ -89,6 +120,42 @@ local function recentActionsSummary()
 	return table.concat(s, "\n")
 end
 
+-- Format ... into one string (for print/warn/error)
+local function formatPrintArgs(...)
+	local n = select("#", ...)
+	if n == 0 then return "" end
+	local parts = {}
+	for i = 1, n do
+		parts[i] = tostring(select(i, ...))
+	end
+	return table.concat(parts, " ")
+end
+
+-- Throttle: batch script prints so we don't flood Discord (rate limit ~30/min)
+local PRINT_THROTTLE_SEC = 1.2
+local printBuffer = {}
+local lastPrintSend = 0
+
+local function flushPrintBuffer()
+	if #printBuffer == 0 then return end
+	local text = table.concat(printBuffer, "\n")
+	printBuffer = {}
+	lastPrintSend = tick()
+	sendToDiscord("**Script said (print)**\n" .. text:sub(1, 1900))
+end
+
+local function sendScriptPrint(label, ...)
+	local msg = formatPrintArgs(...)
+	if msg == "" then return end
+	-- Skip our own observer messages
+	if msg:find("^%[OBSERVER%]") then return end
+	logAction("Script: " .. msg:sub(1, 60))
+	table.insert(printBuffer, msg)
+	if tick() - lastPrintSend >= PRINT_THROTTLE_SEC then
+		flushPrintBuffer()
+	end
+end
+
 local function sendFirstScriptToDiscord()
 	local source, label = nil, nil
 	local fromG = _G.FIRST_SCRIPT_SOURCE or _G.__FIRST_SCRIPT_SOURCE
@@ -119,6 +186,16 @@ mt.__namecall = newcclosure(function(self, ...)
 	local method = getnamecallmethod()
 	local args = {...}
 
+	if method == "Fire" then
+		local className = type(self) == "userdata" and self.ClassName or ""
+		if className == "BindableEvent" or className == "BindableFunction" then
+			local name = (type(self) == "userdata" and self.Name) or tostring(self)
+			logAction("BindableEvent: " .. name)
+			sendToDiscord("**Script event** `" .. tostring(name) .. "` (Bindable)\nArgs: " .. formatArgs(...))
+		end
+		return originalNamecall(self, ...)
+	end
+
 	if method == "FireServer" then
 		local name = (type(self) == "userdata" and self.Name) or tostring(self)
 		local path = type(self) == "userdata" and self.GetFullName and self:GetFullName() or name
@@ -137,14 +214,23 @@ mt.__namecall = newcclosure(function(self, ...)
 	end
 
 	if method == "Create" and tostring(self) == "TweenService" then
-		logAction("TweenService:Create")
-		sendToDiscord("**Tween** created (TweenService:Create)")
+		local tweenInfo, instance, goalProps = args[1], args[2], args[3]
+		local goalStr = formatTweenGoals(goalProps)
+		logAction("TweenService:Create " .. (goalStr ~= "" and "→ " .. goalStr or ""))
+		local targetName = (type(instance) == "userdata" and instance.Name) and instance.Name or safeStr(instance)
+		sendToDiscord("**Tween (dash/move)**\nInstance: `" .. tostring(targetName) .. "`\n" .. (goalStr ~= "" and ("Goal: " .. goalStr) or "Goal: (see args)") .. "\nRecent:\n" .. recentActionsSummary())
 		return originalNamecall(self, ...)
 	end
 
 	if method == "SetPrimaryPartCFrame" then
-		logAction("SetPrimaryPartCFrame (teleport)")
-		sendToDiscord("**Teleport** SetPrimaryPartCFrame\nRecent:\n" .. recentActionsSummary())
+		local targetCF = args[1]
+		local toPos = formatCFrameOrVector(targetCF)
+		local fromPos = ""
+		if type(self) == "userdata" and self.PrimaryPart and self.PrimaryPart.Position then
+			fromPos = "From: " .. formatCFrameOrVector(self.PrimaryPart.Position) .. "\n"
+		end
+		logAction("SetPrimaryPartCFrame (teleport) → " .. toPos)
+		sendToDiscord("**Teleport** SetPrimaryPartCFrame\n" .. fromPos .. "To: " .. toPos .. "\nRecent:\n" .. recentActionsSummary())
 		return originalNamecall(self, ...)
 	end
 
@@ -154,12 +240,116 @@ mt.__namecall = newcclosure(function(self, ...)
 		return originalNamecall(self, ...)
 	end
 
+	-- HTTP calls (e.g. Luarmor loader, API calls) – so you see what URLs the script hits
+	if method == "GetAsync" or method == "HttpGet" or method == "PostAsync" or method == "HttpPost" then
+		local url = type(args[1]) == "string" and args[1] or safeStr(args[1])
+		-- Don't log our own webhook posts
+		if url and not url:find("discord%.com/api/webhooks", 1, true) then
+			logAction(method .. ": " .. url:sub(1, 100))
+			sendToDiscord(("**%s**\n`%s`\n(Args: %s)"):format(method, url:sub(1, 500), formatArgs(...)))
+		end
+		return originalNamecall(self, ...)
+	end
+
+	-- GetService – which services the script uses (RunService, TweenService, etc.)
+	if method == "GetService" then
+		local svc = type(args[1]) == "string" and args[1] or safeStr(args[1])
+		logAction("GetService: " .. tostring(svc))
+		sendToDiscord("**GetService** `" .. tostring(svc) .. "`")
+		return originalNamecall(self, ...)
+	end
+
+	-- Instance.new – what the script creates (GUI, parts, etc.)
+	if method == "new" and args[1] then
+		local className = type(args[1]) == "string" and args[1] or safeStr(args[1])
+		logAction("Instance.new: " .. tostring(className))
+		sendToDiscord("**Instance.new** `" .. tostring(className) .. "`")
+		return originalNamecall(self, ...)
+	end
+
+	-- PivotTo – another way to move a model (like teleport)
+	if method == "PivotTo" then
+		local toPos = args[1] and formatCFrameOrVector(args[1]) or formatArgs(...)
+		local name = (type(self) == "userdata" and self.Name) or tostring(self)
+		logAction("PivotTo: " .. name .. " → " .. toPos)
+		sendToDiscord("**PivotTo** (model move)\n`" .. tostring(name) .. "` → " .. toPos)
+		return originalNamecall(self, ...)
+	end
+
+	-- Clone – what the script clones
+	if method == "Clone" then
+		local name = (type(self) == "userdata" and self.Name) or tostring(self)
+		local class = (type(self) == "userdata" and self.ClassName) or "?"
+		logAction("Clone: " .. class .. " " .. name)
+		sendToDiscord("**Clone** `" .. tostring(class) .. "` " .. tostring(name))
+		return originalNamecall(self, ...)
+	end
+
+	-- Destroy – what the script destroys
+	if method == "Destroy" then
+		local name = (type(self) == "userdata" and self.Name) or tostring(self)
+		local full = (type(self) == "userdata" and self.GetFullName) and self:GetFullName() or name
+		logAction("Destroy: " .. full)
+		sendToDiscord("**Destroy** `" .. tostring(full) .. "`")
+		return originalNamecall(self, ...)
+	end
+
+	-- Invoke (InvokeServer from server side or Invoke on BindableFunction)
+	if method == "Invoke" then
+		local className = type(self) == "userdata" and self.ClassName or ""
+		if className == "RemoteFunction" then
+			local path = type(self) == "userdata" and self.GetFullName and self:GetFullName() or tostring(self)
+			local ret = originalNamecall(self, ...)
+			logAction("Invoke (RemoteFunction): " .. path)
+			sendToDiscord("**Invoke** (Remote)\n`" .. tostring(path) .. "`\nArgs: " .. formatArgs(...) .. "\nReturn: " .. safeStr(ret))
+			return ret
+		end
+		return originalNamecall(self, ...)
+	end
+
 	return originalNamecall(self, ...)
 end)
 
 setreadonly(mt, true)
 
+-- Hook print, warn, error so script messages ("Auto farm activated", etc.) go to Discord
+local orig_print = print
+local orig_warn = warn
+local orig_error = error
+
+function print(...)
+	sendScriptPrint("print", ...)
+	return orig_print(...)
+end
+
+function warn(...)
+	local msg = formatPrintArgs(...)
+	if msg ~= "" and not msg:find("^%[OBSERVER%]") then
+		logAction("Script warn: " .. msg:sub(1, 60))
+		sendToDiscord("**Script warn**\n" .. msg:sub(1, 1900))
+	end
+	return orig_warn(...)
+end
+
+-- error() often throws; we log then re-throw
+local orig_error_typed = orig_error
+function error(msg, level)
+	if type(msg) == "string" and msg ~= "" and not msg:find("^%[OBSERVER%]") then
+		logAction("Script error: " .. msg:sub(1, 60))
+		sendToDiscord("**Script error**\n" .. msg:sub(1, 1900))
+	end
+	return orig_error_typed(msg, level)
+end
+
+-- Flush buffered prints every so often so nothing is lost
+spawn(function()
+	while true do
+		wait(PRINT_THROTTLE_SEC)
+		flushPrintBuffer()
+	end
+end)
+
 sendFirstScriptToDiscord()
 
-logAction("Observer loaded. Essential hooks only (FireServer, InvokeServer, Tween, Teleport, Kick).")
-sendToDiscord("**Observer** active. Logging Remotes / Tween / Teleport / Kick to this webhook.")
+logAction("Observer loaded. Full observer: print, warn, error, GetService, Instance.new, Clone, Destroy, PivotTo, Remotes, Tween, Teleport, HTTP, Kick.")
+sendToDiscord("**Observer** active (full). I will report:\n• **print** / warn / error\n• **GetService** (which services)\n• **Instance.new** (what it creates)\n• **Clone** / **Destroy**\n• **PivotTo** (model move)\n• **FireServer** / **InvokeServer** / **Invoke**\n• **Tween** + **Teleport** (SetPrimaryPartCFrame)\n• **HTTP**, **Kick**, **BindableEvent**\nRun your script now.")
