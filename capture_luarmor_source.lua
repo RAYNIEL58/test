@@ -21,9 +21,10 @@ local function sendToWebhook(content, useEmbed)
 			payload = { content = content:sub(1, 1990) }
 		end
 		local body
-		if game and game:GetService then
-			body = game:GetService("HttpService"):JSONEncode(payload)
-			game:GetService("HttpService"):PostAsync(WEBHOOK_URL, body)
+		if game and game.GetService then
+			local HttpService = game:GetService("HttpService")
+			body = HttpService:JSONEncode(payload)
+			HttpService:PostAsync(WEBHOOK_URL, body)
 		elseif type(request) == "function" then
 			local esc = function(s) return ("%q"):format(tostring(s):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r")) end
 			if payload.embeds and payload.embeds[1] then
