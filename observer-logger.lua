@@ -18,41 +18,65 @@
 ==============================================================================
 ]]
 
+-- First thing: show in injector console so you know the script ran (even if Discord fails)
+pcall(function() print("[OBSERVER] Script loading...") end)
+pcall(function() warn("[OBSERVER] If you see this, the observer started. Trying Discord next.") end)
+
 -- Your Discord webhook – observer sends debug logs here. Don't share or commit this URL.
 local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1479433171673022674/f3h7jy2fDUPElS5KUz_CDHwhUtYOx_hL3mh_t_x2CGqRmIETBJ8sCMY4eXbqWwXCkGMo"
 
 local actionLog = {}
 local MAX_LOG = 20
 
--- Try to send a message to Discord (works with injectors: request, http_request, HttpService)
+-- Build JSON body for Discord (no dependency on HttpService:JSONEncode)
+local function jsonEscape(s)
+	return tostring(s):sub(1, 1990):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r")
+end
+
+-- Try to send a message to Discord (tries every common injector HTTP API)
 local function trySendToDiscordRaw(content)
 	if type(content) ~= "string" or #content == 0 then return false end
-	local payload = ("{\"content\":%s}"):format(
-		("%q"):format(tostring(content):sub(1, 1990):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"))
-	)
+	local escaped = jsonEscape(content)
+	local payload = '{"content":"' .. escaped .. '"}'
+
+	-- 1) Roblox HttpService (when script runs inside game)
 	local ok = pcall(function()
 		if game and type(game.GetService) == "function" then
 			local HttpService = game:GetService("HttpService")
 			if HttpService and HttpService.PostAsync then
-				local body = HttpService:JSONEncode({ content = content:sub(1, 1990) })
+				local body = (HttpService.JSONEncode and HttpService:JSONEncode({ content = content:sub(1, 1990) })) or payload
 				HttpService:PostAsync(DISCORD_WEBHOOK_URL, body)
 				return
 			end
 		end
 	end)
 	if ok then return true end
-	ok = pcall(function()
-		local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
-		if type(req) == "function" then
+
+	-- 2) request / http_request / syn.request / fluxus / etc.
+	local req = request or http_request or web_request
+		or (type(syn) == "table" and syn.request)
+		or (type(fluxus) == "table" and fluxus.request)
+		or (type(http) == "table" and http.request)
+		or (type(_G) == "table" and (_G.request or _G.http_request))
+	if type(req) == "function" then
+		ok = pcall(function()
 			req({ Url = DISCORD_WEBHOOK_URL, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = payload })
-			return
-		end
-	end)
-	return ok
+		end)
+		if ok then return true end
+	end
+
+	return false
 end
 
--- Ping Discord immediately so you know the script ran (works with injectors)
-trySendToDiscordRaw("**Observer** injecting... If you see this, the script started. Setting up hooks...")
+-- Ping Discord immediately
+local discordOk = trySendToDiscordRaw("**Observer** injecting... If you see this, the script started. Setting up hooks...")
+pcall(function()
+	if discordOk then
+		print("[OBSERVER] Discord ping sent. Check your webhook channel.")
+	else
+		warn("[OBSERVER] Discord ping FAILED. No game or request() in this injector – check injector output only.")
+	end
+end)
 
 local function safeStr(v)
 	local ok, s = pcall(function()
