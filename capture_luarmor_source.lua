@@ -1,8 +1,7 @@
 --[[
   For LDPlayer / mobile executor.
-  Saves captured script to FILES only (no Discord). You copy files to PC via LDPlayer shared folder.
-  After run: find folder "LuarmorCapture" in executor files, copy source_captured_2.lua and
-  source_captured_3.lua to PC. The one that does NOT start with "Luarmor V4 bootstrapper" is your script.
+  Saves EVERYTHING: loader, bootstrapper (Lua decryptor), and your real script.
+  No Discord. Find folder "LuarmorCapture" and copy to PC via shared folder.
 ]]
 
 local _K = "XEBGtoEqCvrdDyGxWPpcKrHYKGxvrijf"
@@ -12,7 +11,6 @@ local _n = 0
 local _real = loadstring
 local _folder = "LuarmorCapture"
 
--- Returns true if this looks like the Luarmor bootstrapper (not the real script)
 local function isBootstrapper(s)
 	if type(s) ~= "string" or #s < 500 then return false end
 	local head = s:sub(1, 500)
@@ -20,16 +18,17 @@ local function isBootstrapper(s)
 end
 
 local function _save(s)
-	if type(s) ~= "string" or #s < 600 then return end
+	if type(s) ~= "string" or #s < 50 then return end
 	_n = _n + 1
 	(task and task.defer or spawn or function(f) f() end)(function()
 		pcall(function()
 			if not writefile then return end
 			if makefolder then pcall(function() makefolder(_folder) end) end
-			local fname = _folder .. "/source_captured_" .. _n .. ".lua"
-			writefile(fname, s)
-			-- Also save the one that is NOT bootstrapper as "real script" so you know which to open
-			if not isBootstrapper(s) then
+			local base = _folder .. "/source_captured_" .. _n
+			writefile(base .. ".lua", s)
+			if isBootstrapper(s) then
+				writefile(_folder .. "/source_BOOTSTRAPPER_DECRYPTOR.lua", s)
+			else
 				writefile(_folder .. "/source_REAL_SCRIPT.lua", s)
 			end
 		end)
