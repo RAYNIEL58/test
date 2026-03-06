@@ -16,18 +16,19 @@
 
   Run observer FIRST → then run the script you want to observe.
 
-  Delta injector: Inject this WHILE IN A GAME (after the game has loaded).
+  Delta / Seliware / other injectors: Run this WHILE IN A GAME (after the game has loaded).
   Discord needs game:GetService("HttpService"):PostAsync – we retry when game is ready.
 
-  If you get "Expected 'end'" or "<eof>" error: paste the ENTIRE script (all lines).
-  Do not cut or copy only part – use "Open script from file" or paste the full observer.
+  If you get "Expected 'end'" or "attempt to call a nil value": paste the ENTIRE script.
+  Or load from file – do not copy only part of the script.
 ==============================================================================
 ]]
 
--- First thing: show in injector console (Delta may have print/warn as nil – don't call nil)
+-- Safe refs for first line (some loadstring envs have type/pcall/print/warn nil)
+local _type, _pcall = type, pcall
 local function say(msg, asWarn)
 	local fn = asWarn and warn or print
-	if type(fn) == "function" then pcall(fn, msg) end
+	if _type and _pcall and _type(fn) == "function" then _pcall(fn, msg) end
 end
 say("[OBSERVER] Script loading...", false)
 say("[OBSERVER] If you see this, the observer started. Trying Discord next.", true)
