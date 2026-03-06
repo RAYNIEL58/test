@@ -18,6 +18,9 @@
 
   Delta injector: Inject this WHILE IN A GAME (after the game has loaded).
   Discord needs game:GetService("HttpService"):PostAsync – we retry when game is ready.
+
+  If you get "Expected 'end'" or "<eof>" error: paste the ENTIRE script (all lines).
+  Do not cut or copy only part – use "Open script from file" or paste the full observer.
 ==============================================================================
 ]]
 
@@ -81,7 +84,7 @@ local discordOk = trySendToDiscordRaw("**Observer** injecting... If you see this
 -- Delta / injectors that run before game is ready: retry when game appears (wait up to ~15s)
 if not discordOk and (not game or not pcall(function() game:GetService("HttpService") end)) then
 	pcall(function()
-		warn("[OBSERVER] Discord failed (no game yet?). Will retry when game is ready...")
+		say("[OBSERVER] Discord failed (no game yet?). Will retry when game is ready...", true)
 		local waitFn = wait or (type(task) == "table" and task.wait) or function() end
 		for i = 1, 30 do
 			waitFn(0.5)
