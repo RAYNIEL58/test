@@ -400,7 +400,9 @@ local thieunang =
 --     setfflag("HumanoidParallelRemoveNoPhysics", "False")
 --     setfflag("HumanoidParallelRemoveNoPhysicsNoSimulate2", "False")
 -- end
+-- Anti-ban: rifle shot counter (kick before game bans for too many shots)
 local banvaudau = 0
+local RIFLE_KICK_AT = 498  -- kick when shot count reaches this (before 499th to avoid game ban)
 function SetVaoDau(i) 
     banvaudau=i
 end
@@ -439,8 +441,8 @@ old = hookmetamethod(game, "__namecall", function(...)
     if tostring(Self)=="CIcklcon" then 
         SetVaoDau(GetVauDau()+1)
         if Settings.RifleKick then
-            if GetVaoDau()>480 then 
-                plr:Kick("\n[CFA Hub]\nKicked 499th rifle shoot (Rifle Kick)")
+            if GetVauDau() >= RIFLE_KICK_AT then 
+                plr:Kick("\n[CFA Hub]\nKicked at " .. RIFLE_KICK_AT .. " rifle shots (Rifle Kick - anti ban)")
             end
         end
     end
@@ -1075,7 +1077,7 @@ Section2:CreateToggle("Auto Buso Quest", {Toggled=Settings.AutoBusoQuest,Descrip
     Settings.AutoBusoQuest=state
 end)
 Section2:CreateDropdown("Level Farm Method", {
-    List = {"Rifle","Sword","Black Leg"},
+    List = {"Basic Combat","Rifle","Sword","Black Leg"},
     Default = Settings.FarmMode
 }, function(item)
     Settings.FarmMode = item
@@ -1103,6 +1105,9 @@ spawn(function()
         local GetItem
         local BuyItem
         local Pos
+        if Settings.FarmMode=="Basic Combat" then
+            mode="Basic Combat"
+        end
         if Settings.FarmMode=="Sword" then
              mode="Katana" 
              price=1000 
@@ -1122,7 +1127,11 @@ spawn(function()
        
         if Settings.OneClick and mode then 
             lf.SetValue(false)
-            if not GetItem() and not CheckInven(mode) then
+            if mode == "Basic Combat" then
+                AFB.SetValue(false)
+                lf.SetValue(true)
+                olf.SetValue(false)
+            elseif not GetItem() and not CheckInven(mode) then
                 if data.Stats.Peli.Value < price then 
                     AFB.SetValue(true)
                 else
@@ -1644,7 +1653,11 @@ function Detect()
 	end
 	return false
 end
+-- Anti-ban: debounce so we don't kick multiple times in a row
+local lastSafeModeKick = 0
 function SafeModeKick() 
+    if tick() - lastSafeModeKick < 2 then return end
+    lastSafeModeKick = tick()
     plr:Kick("\n[CFA Hub]\nKicked for suspicious movements (Safe Mode)")
 end
 if plr.Character then
@@ -1705,6 +1718,8 @@ spawn(function()
 end)
 
 
+--[[ Anti-ban / Security: Safe Mode kicks on suspicious movement (speed, air time, velocity).
+     Rifle Kick kicks before 499 shots to avoid game ban. Auto Kick leaves after N minutes. ]]
 local Section2 = Tab2:CreateSection("Security")
 Section2:CreateToggle("Safe Mode", {Toggled=Settings.SafeMode,Description = "Will kick you if your character having suspicious movements"}, function(state)
     Settings.SafeMode = state
@@ -2127,6 +2142,9 @@ function RapidHold()
 end
 function EquipTool() 
     if StoringDF then return end
+    if Settings.FarmMode == "Basic Combat" then
+        return
+    end
     if Settings.FarmMode == "Black Leg" then
         if
             game.Players.LocalPlayer.Character:FindFirstChild("Humanoid") and
@@ -2212,7 +2230,7 @@ local lastup = tick()
 
 while wait() do
     if Settings.Farm then
-        if Settings.FarmMode == "Sword" or Settings.FarmMode == "Black Leg" then
+        if Settings.FarmMode == "Basic Combat" or Settings.FarmMode == "Sword" or Settings.FarmMode == "Black Leg" then
             if not StoringDF then 
                 EquipTool()
             end
@@ -2315,7 +2333,7 @@ while wait() do
                                                 MucTieu.MucTieu = v.HumanoidRootPart
                                                 
                                                 
-                                                local posf = (Settings.FarmMode=="Sword" and Dt.SwordY) or (Settings.FarmMode=="Black Leg" and Dt.BlackLegY)
+                                                local posf = (Settings.FarmMode=="Sword" and Dt.SwordY) or (Settings.FarmMode=="Black Leg" and Dt.BlackLegY) or (Settings.FarmMode=="Basic Combat" and Dt.SwordY)
                                                 if AttackInCooldown() then 
                                                     posf=Dt.CooldownY
                                                 end
@@ -2359,6 +2377,7 @@ while wait() do
                                 if Settings.FarmMode == "Black Leg" then
                                     cf = CFrame.new(curr.X, Dt.BlackLegY, curr.Z)
                                 else
+                                    -- Basic Combat or Sword: same height logic
                                     if Dt.SwordY then
                                         cf = CFrame.new(curr.X, Dt.SwordY, curr.Z)
                                     else
