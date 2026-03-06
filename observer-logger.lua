@@ -38,6 +38,7 @@ local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/147943317167302267
 
 local actionLog = {}
 local MAX_LOG = 20
+local _tick = (type(tick) == "function" and tick) or function() return 0 end
 
 -- Build JSON body for Discord (no dependency on HttpService:JSONEncode)
 local function jsonEscape(s)
@@ -217,7 +218,7 @@ local function flushPrintBuffer()
 	if #printBuffer == 0 then return end
 	local text = table.concat(printBuffer, "\n")
 	printBuffer = {}
-	lastPrintSend = tick()
+	lastPrintSend = _tick()
 	sendToDiscord("**Script said (print)**\n" .. text:sub(1, 1900))
 end
 
@@ -228,14 +229,15 @@ local function sendScriptPrint(label, ...)
 	if msg:find("^%[OBSERVER%]") then return end
 	logAction("Script: " .. msg:sub(1, 60))
 	table.insert(printBuffer, msg)
-	if tick() - lastPrintSend >= PRINT_THROTTLE_SEC then
+	if _tick() - lastPrintSend >= PRINT_THROTTLE_SEC then
 		flushPrintBuffer()
 	end
 end
 
 local function sendFirstScriptToDiscord()
 	local source, label = nil, nil
-	local fromG = _G.FIRST_SCRIPT_SOURCE or _G.__FIRST_SCRIPT_SOURCE
+	local env = type(_G) == "table" and _G or {}
+	local fromG = env.FIRST_SCRIPT_SOURCE or env.__FIRST_SCRIPT_SOURCE
 	if type(fromG) == "string" and #fromG > 0 then
 		source, label = fromG, "From _G.FIRST_SCRIPT_SOURCE"
 	end
@@ -410,8 +412,8 @@ pcall(function()
 			logAction("Console ERROR: " .. message:sub(1, 50))
 			sendToDiscord("**Console ERROR**\n" .. message:sub(1, 1900) .. (source and "\n`" .. tostring(source) .. "`" or ""))
 		elseif typ == "Enum.LogMessageType.MessageWarning" or typ == "MessageWarning" or typ == "1" then
-			if tick() - lastLogSend < LOG_THROTTLE then return end
-			lastLogSend = tick()
+			if _tick() - lastLogSend < LOG_THROTTLE then return end
+			lastLogSend = _tick()
 			logAction("Console warn: " .. message:sub(1, 50))
 			sendToDiscord("**Console warn**\n" .. message:sub(1, 1900))
 		end
@@ -447,12 +449,15 @@ pcall(function()
 	end
 end)
 
--- Flush buffered prints every so often (use spawn if available)
-local schedule = (type(spawn) == "function" and spawn) or (type(task) == "table" and task.spawn) or function(f) pcall(f) end
+-- Flush buffered prints every so often (use spawn/coroutine so we don't block)
+local schedule = (type(spawn) == "function" and spawn) or (type(task) == "table" and task.spawn)
+	or (type(coroutine) == "table" and type(coroutine.wrap) == "function" and function(f) coroutine.wrap(f)() end)
+	or function(f) pcall(f) end
 pcall(function()
 	schedule(function()
+		local waitFn = (type(wait) == "function" and wait) or (type(task) == "table" and task.wait) or function() end
 		while true do
-			pcall(function() if wait then wait(PRINT_THROTTLE_SEC) end end)
+			pcall(waitFn, PRINT_THROTTLE_SEC)
 			flushPrintBuffer()
 		end
 	end)
