@@ -100,9 +100,16 @@ and #plr.Backpack:GetChildren() ~= 0 and pcall(function()
     return game.Players.LocalPlayer.Idled
 end)
 local function FireButton(x)
-    for i, v in pairs(getconnections(x.MouseButton1Click)) do 
-        v:Function()
-    end
+    pcall(function()
+        local conns = type(getconnections) == "function" and getconnections(x.MouseButton1Click) or {}
+        for i, v in pairs(conns) do
+            pcall(function()
+                if type(v.Function) == "function" then v.Function()
+                elseif type(v["Function"]) == "function" then v["Function"]()
+                else v:Function() end
+            end)
+        end
+    end)
 end
 if game.PlaceId==1730877806 then
     repeat wait() until game:GetService("ReplicatedStorage").Events:FindFirstChild("reserved")
@@ -129,11 +136,17 @@ local rnd = tostring(math.random(1,100000))
 local request=request
 if syn then request=syn.request end
 local StoringDF = false
-for i, v in next, getconnections(game.Players.LocalPlayer.Idled) do
-    v:Disable()
-end
+pcall(function()
+    if type(getconnections) == "function" then
+        for i, v in next, getconnections(game.Players.LocalPlayer.Idled) or {} do
+            if v and (type(v.Disable) == "function" or type(v.Disable) == "nil") then
+                pcall(function() v:Disable() end)
+            end
+        end
+    end
+end)
 local vu = game:GetService("VirtualUser")
-game:GetService("Players").LocalPlayer.Idled:connect(
+game:GetService("Players").LocalPlayer.Idled:Connect(
     function()
         vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
         wait(1)
@@ -145,30 +158,48 @@ function BuyKatana()
     fireclickdetector(game:GetService("Workspace").BuyableItems.Katana.ShopPart.ClickDetector)
 end
 local FindNearest
-for k, v in pairs(getgc()) do
-    if debug.getinfo(v).name == "FindNearest" and tostring(getfenv(v).script) == "Hitbox" then
-        FindNearest = v
-        break
+pcall(function()
+    for k, v in pairs(type(getgc) == "function" and getgc() or {}) do
+        if type(v) == "function" and pcall(function()
+            return debug.getinfo(v).name == "FindNearest" and tostring(getfenv(v).script) == "Hitbox"
+        end) and debug.getinfo(v).name == "FindNearest" and tostring(getfenv(v).script) == "Hitbox" then
+            FindNearest = v
+            break
+        end
     end
-end
+end)
+-- Fallback if game's FindNearest not found (e.g. wrong game or game updated)
 if not FindNearest then
-    game.Players.LocalPlayer:Kick("Script error when loading, rejoin and try again")
+    FindNearest = function(origin, maxDist)
+        local nearest, dist = nil, (maxDist or 500)
+        for _, npc in pairs(game:GetService("Workspace").NPCs:GetChildren()) do
+            if npc:FindFirstChild("HumanoidRootPart") and npc:FindFirstChild("Humanoid") and npc.Humanoid.Health > 0 then
+                local d = (npc.HumanoidRootPart.Position - (origin or plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character.HumanoidRootPart.Position or Vector3.new(0,0,0))).Magnitude
+                if d < dist then dist, nearest = d, npc end
+            end
+        end
+        return nearest
+    end
+    warn("[CFA Hub] Using fallback FindNearest (game Hitbox not found). Rejoin in correct game for best results.")
 end
 MucTieu = {}
-MucTieu.old =
-    hookfunction(
-    FindNearest,
-    function(a, b)
-        if MucTieu.MucTieu then
-            return MucTieu.MucTieu
-        end
-        return MucTieu.old(a, b)
+MucTieu.old = FindNearest
+pcall(function()
+    if type(hookfunction) == "function" then
+        MucTieu.old = hookfunction(FindNearest, function(a, b)
+            if MucTieu.MucTieu then return MucTieu.MucTieu end
+            return MucTieu.old(a, b)
+        end)
     end
-)
+end)
 local secure_call = (syn and syn.secure_call) or function(f)
-        setthreadcontext(2)
-        f()
-        setthreadcontext(7)
+        if type(setthreadcontext) == "function" then
+            pcall(function() setthreadcontext(2) end)
+            f()
+            pcall(function() setthreadcontext(7) end)
+        else
+            f()
+        end
     end
 
 
@@ -185,8 +216,16 @@ pcall(function()
         end
     end
 end)
-local data = game.ReplicatedStorage["Stats" .. game.Players.LocalPlayer.Name]
-print(data.Stats.SpawnPoint.Value)
+local data = game.ReplicatedStorage:WaitForChild("Stats" .. game.Players.LocalPlayer.Name, 30) or game.ReplicatedStorage["Stats" .. game.Players.LocalPlayer.Name]
+if not data or not data:FindFirstChild("Stats") then
+    warn("[CFA Hub] Stats not found. Make sure you are in the correct game and fully loaded.")
+end
+if data and data.Stats and data.Stats:FindFirstChild("SpawnPoint") then
+    print(data.Stats.SpawnPoint.Value)
+end
+if not data then
+    return -- stop here to avoid errors; re-run in correct game
+end
 
 local FarmPath = {
     Buso =  {
@@ -410,43 +449,37 @@ function GetVauDau()
     return banvaudau
 end
 local DisableNoDrown = false
-local old
-old = hookfunction(Instance.new("RemoteEvent").FireServer, function(...)
-    local Self = ...
-    if CheckEN("Nodrown")
-    and tostring(Self) == "swim" then
-        return nil
-    end
-    return old(...)
+local oldFireServer = Instance.new("RemoteEvent").FireServer
+pcall(function()
+    if type(hookfunction) ~= "function" then return end
+    oldFireServer = hookfunction(oldFireServer, function(...)
+        local Self = ...
+        if CheckEN("Nodrown") and tostring(Self) == "swim" then return nil end
+        return oldFireServer(...)
+    end)
 end)
-local old
-old = hookmetamethod(game, "__namecall", function(...)
-    local Self = ...
-    if CheckEN("NoFallDame")
-    and tostring(Self) == "FallDmg" then
-        return nil
-    end
-    if CheckEN("DashNoStam")
-    and tostring(Self) == "takestam" then
-        return nil
-    end
-    if  CheckEN("Nodrown")
-    and tostring(Self) == "swim" then
-        return nil
-    end
-    local args = {...}
-    if getnamecallmethod()=="InvokeServer" and tostring(Self)=="Skill" and args[2]=="Blocking " then
-        return
-    end
-    if tostring(Self)=="CIcklcon" then 
-        SetVaoDau(GetVauDau()+1)
-        if Settings.RifleKick then
-            if GetVauDau() >= RIFLE_KICK_AT then 
-                plr:Kick("\n[CFA Hub]\nKicked at " .. RIFLE_KICK_AT .. " rifle shots (Rifle Kick - anti ban)")
+local oldNamecall
+pcall(function()
+    if type(hookmetamethod) ~= "function" then return end
+    oldNamecall = hookmetamethod(game, "__namecall", function(...)
+        local Self = ...
+        if CheckEN("NoFallDame") and tostring(Self) == "FallDmg" then return nil end
+        if CheckEN("DashNoStam") and tostring(Self) == "takestam" then return nil end
+        if CheckEN("Nodrown") and tostring(Self) == "swim" then return nil end
+        local args = {...}
+        if type(getnamecallmethod) == "function" and getnamecallmethod() == "InvokeServer" and tostring(Self) == "Skill" and args[2] == "Blocking " then
+            return
+        end
+        if tostring(Self) == "CIcklcon" then
+            SetVaoDau(GetVauDau() + 1)
+            if Settings.RifleKick then
+                if GetVauDau() >= RIFLE_KICK_AT then
+                    plr:Kick("\n[CFA Hub]\nKicked at " .. RIFLE_KICK_AT .. " rifle shots (Rifle Kick - anti ban)")
+                end
             end
         end
-    end
-    return old(...)
+        return oldNamecall(...)
+    end)
 end)
 
 local tvktrumskid = tostring(math.random(0, 100000))
@@ -1513,7 +1546,7 @@ function WTS(part, toggle)
     return Vector2.new(screen.x, screen.y)
 end
 local esplist = {}
-game:GetService("RunService").Stepped:connect(
+game:GetService("RunService").Stepped:Connect(
     function()
         for k, v in pairs(esplist) do
             v()
@@ -1983,23 +2016,26 @@ end
 
 local noprint
 
-local old
-old=hookfunction(getrenv().warn,function(...) 
-    local self =...
-    if self=="peli change" then 
-        if c then
-            if not AttackInCooldown() then 
-                Clickc()    
+local oldWarn = (type(getrenv) == "function" and getrenv() or _G or {}).warn or warn
+pcall(function()
+    if type(hookfunction) ~= "function" then return end
+    local env = type(getrenv) == "function" and getrenv() or _G or {}
+    if type(env.warn) ~= "function" then return end
+    oldWarn = hookfunction(env.warn, function(...)
+        local self = ...
+        if self == "peli change" then
+            if c then
+                if not AttackInCooldown() then Clickc() end
+                return
             end
-            return
+            if cGun then
+                ClickcGun()
+                return
+            end
+            if noprint then return end
         end
-        if cGun then 
-            ClickcGun()    
-            return
-        end
-        if noprint then return end
-    end
-    return old(...)
+        return oldWarn(...)
+    end)
 end)
 local data = game.ReplicatedStorage["Stats"..game.Players.LocalPlayer.Name]
 getgenv().ClickMelee = function() 
@@ -2176,7 +2212,7 @@ end
 local TpPoss
 do 
     local cc = false
-    game:GetService("RunService").Stepped:connect(function()
+    game:GetService("RunService").Stepped:Connect(function()
         if not cc and TpPoss then
             cc=true 
             pcall(function() 
