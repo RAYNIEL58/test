@@ -8,6 +8,7 @@
   observer watches whatever script you run after it.
 
   Logs to your Discord webhook:
+  - Console errors (e.g. "attempt to call a nil value", animation failed)
   - Script print/warn/error (e.g. "Auto farm activated", "Teleporting to player")
   - FireServer / InvokeServer (remotes + args)
   - Tween (dash) + Teleport (position)
@@ -22,6 +23,36 @@ local DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/147943317167302267
 
 local actionLog = {}
 local MAX_LOG = 20
+
+-- Try to send a message to Discord (works with injectors: request, http_request, HttpService)
+local function trySendToDiscordRaw(content)
+	if type(content) ~= "string" or #content == 0 then return false end
+	local payload = ("{\"content\":%s}"):format(
+		("%q"):format(tostring(content):sub(1, 1990):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"))
+	)
+	local ok = pcall(function()
+		if game and type(game.GetService) == "function" then
+			local HttpService = game:GetService("HttpService")
+			if HttpService and HttpService.PostAsync then
+				local body = HttpService:JSONEncode({ content = content:sub(1, 1990) })
+				HttpService:PostAsync(DISCORD_WEBHOOK_URL, body)
+				return
+			end
+		end
+	end)
+	if ok then return true end
+	ok = pcall(function()
+		local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+		if type(req) == "function" then
+			req({ Url = DISCORD_WEBHOOK_URL, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = payload })
+			return
+		end
+	end)
+	return ok
+end
+
+-- Ping Discord immediately so you know the script ran (works with injectors)
+trySendToDiscordRaw("**Observer** injecting... If you see this, the script started. Setting up hooks...")
 
 local function safeStr(v)
 	local ok, s = pcall(function()
@@ -86,30 +117,25 @@ end
 
 local function sendToDiscord(content, useEmbed)
 	if type(content) ~= "string" or #content == 0 then return end
-	pcall(function()
-		local payload
-		if useEmbed and #content > 500 then
-			local desc = content:sub(1, 3900)
-			if #content > 3900 then desc = desc .. "\n...(truncated)" end
-			payload = { content = "**First script** (source below)", embeds = { { title = "Source", description = ("```lua\n%s\n```"):format(desc) } } }
-		else
-			payload = { content = content:sub(1, 1990) }
-		end
-		local body
+	local msg = content:sub(1, 1990)
+	local sent = pcall(function()
 		if game and game:GetService then
-			body = game:GetService("HttpService"):JSONEncode(payload)
-			game:GetService("HttpService"):PostAsync(DISCORD_WEBHOOK_URL, body)
-		elseif type(request) == "function" then
-			local function esc(s) return ("%q"):format(tostring(s):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r")) end
-			if payload.embeds and payload.embeds[1] then
-				local e = payload.embeds[1]
-				body = ("{\"content\":%s,\"embeds\":[{\"title\":%s,\"description\":%s}]}"):format(esc(payload.content), esc(e.title), esc(e.description or ""))
-			else
-				body = ("{\"content\":%s}"):format(esc(payload.content))
+			local HttpService = game:GetService("HttpService")
+			if HttpService and HttpService.JSONEncode and HttpService.PostAsync then
+				local payload = (useEmbed and #content > 500) and { content = "**First script** (source below)", embeds = { { title = "Source", description = ("```lua\n%s\n```"):format(content:sub(1, 3900)) } } } or { content = msg }
+				local body = HttpService:JSONEncode(payload)
+				HttpService:PostAsync(DISCORD_WEBHOOK_URL, body)
+				return
 			end
-			request({ Url = DISCORD_WEBHOOK_URL, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
+		end
+		-- Fallback for injectors (request, http_request, syn.request, etc.)
+		local payload = ("{\"content\":%s}"):format(("%q"):format(msg:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r")))
+		local req = request or http_request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+		if type(req) == "function" then
+			req({ Url = DISCORD_WEBHOOK_URL, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = payload })
 		end
 	end)
+	if not sent then trySendToDiscordRaw(msg) end
 end
 
 local function recentActionsSummary()
@@ -177,14 +203,18 @@ local function sendFirstScriptToDiscord()
 	end
 end
 
-local mt = getrawmetatable(game)
-setreadonly(mt, false)
-local originalNamecall = mt.__namecall
-
--- Only hook what we need: Remotes, Tween, Teleport, Kick. No GetService/Connect/FindFirstChild.
-mt.__namecall = newcclosure(function(self, ...)
-	local method = getnamecallmethod()
-	local args = {...}
+-- Metatable hook (skipped if injector doesn't provide getrawmetatable/newcclosure/getnamecallmethod)
+local metatableHooked = false
+pcall(function()
+	if type(getrawmetatable) ~= "function" or type(setreadonly) ~= "function" or type(newcclosure) ~= "function" or type(getnamecallmethod) ~= "function" then return end
+	if not game then return end
+	local mt = getrawmetatable(game)
+	if not mt or not rawget(mt, "__namecall") then return end
+	setreadonly(mt, false)
+	local originalNamecall = mt.__namecall
+	mt.__namecall = newcclosure(function(self, ...)
+		local method = getnamecallmethod()
+		local args = {...}
 
 	if method == "Fire" then
 		local className = type(self) == "userdata" and self.ClassName or ""
@@ -307,49 +337,81 @@ mt.__namecall = newcclosure(function(self, ...)
 		return originalNamecall(self, ...)
 	end
 
-	return originalNamecall(self, ...)
+		return originalNamecall(self, ...)
+	end)
+	setreadonly(mt, true)
+	metatableHooked = true
 end)
 
-setreadonly(mt, true)
+-- Capture console/output errors (e.g. "attempt to call a nil value", animation failed) and send to Discord
+pcall(function()
+	if not game or type(game.GetService) ~= "function" then return end
+	local LogService = game:GetService("LogService")
+	if not LogService or not LogService.MessageOut then return end
+	local lastLogSend = 0
+	local LOG_THROTTLE = 1.5
+	LogService.MessageOut:Connect(function(message, messageType, source)
+		if type(message) ~= "string" or message == "" then return end
+		if message:find("^%[OBSERVER%]") then return end
+		local typ = tostring(messageType)
+		-- MessageError = engine/runtime errors; MessageWarning = warnings; MessageOutput = print
+		if typ == "Enum.LogMessageType.MessageError" or typ == "MessageError" or typ == "2" then
+			logAction("Console ERROR: " .. message:sub(1, 50))
+			sendToDiscord("**Console ERROR**\n" .. message:sub(1, 1900) .. (source and "\n`" .. tostring(source) .. "`" or ""))
+		elseif typ == "Enum.LogMessageType.MessageWarning" or typ == "MessageWarning" or typ == "1" then
+			if tick() - lastLogSend < LOG_THROTTLE then return end
+			lastLogSend = tick()
+			logAction("Console warn: " .. message:sub(1, 50))
+			sendToDiscord("**Console warn**\n" .. message:sub(1, 1900))
+		end
+	end)
+	logAction("LogService.MessageOut hooked – console errors will be sent to Discord.")
+end)
 
--- Hook print, warn, error so script messages ("Auto farm activated", etc.) go to Discord
-local orig_print = print
-local orig_warn = warn
-local orig_error = error
-
-function print(...)
-	sendScriptPrint("print", ...)
-	return orig_print(...)
-end
-
-function warn(...)
-	local msg = formatPrintArgs(...)
-	if msg ~= "" and not msg:find("^%[OBSERVER%]") then
-		logAction("Script warn: " .. msg:sub(1, 60))
-		sendToDiscord("**Script warn**\n" .. msg:sub(1, 1900))
+-- Hook print, warn, error so script messages go to Discord (skipped if injector blocks global replace)
+pcall(function()
+	local orig_print = print
+	local orig_warn = warn
+	local orig_error = error
+	function print(...)
+		sendScriptPrint("print", ...)
+		return orig_print(...)
 	end
-	return orig_warn(...)
-end
-
--- error() often throws; we log then re-throw
-local orig_error_typed = orig_error
-function error(msg, level)
-	if type(msg) == "string" and msg ~= "" and not msg:find("^%[OBSERVER%]") then
-		logAction("Script error: " .. msg:sub(1, 60))
-		sendToDiscord("**Script error**\n" .. msg:sub(1, 1900))
+	function warn(...)
+		local msg = formatPrintArgs(...)
+		if msg ~= "" and not msg:find("^%[OBSERVER%]") then
+			logAction("Script warn: " .. msg:sub(1, 60))
+			sendToDiscord("**Script warn**\n" .. msg:sub(1, 1900))
+		end
+		return orig_warn(...)
 	end
-	return orig_error_typed(msg, level)
-end
-
--- Flush buffered prints every so often so nothing is lost
-spawn(function()
-	while true do
-		wait(PRINT_THROTTLE_SEC)
-		flushPrintBuffer()
+	local orig_error_typed = orig_error
+	function error(msg, level)
+		if type(msg) == "string" and msg ~= "" and not msg:find("^%[OBSERVER%]") then
+			logAction("Script error: " .. msg:sub(1, 60))
+			sendToDiscord("**Script error**\n" .. msg:sub(1, 1900))
+		end
+		return orig_error_typed(msg, level)
 	end
 end)
 
-sendFirstScriptToDiscord()
+-- Flush buffered prints every so often (use spawn if available)
+local schedule = (type(spawn) == "function" and spawn) or (type(task) == "table" and task.spawn) or function(f) pcall(f) end
+pcall(function()
+	schedule(function()
+		while true do
+			pcall(function() if wait then wait(PRINT_THROTTLE_SEC) end end)
+			flushPrintBuffer()
+		end
+	end)
+end)
 
-logAction("Observer loaded. Full observer: print, warn, error, GetService, Instance.new, Clone, Destroy, PivotTo, Remotes, Tween, Teleport, HTTP, Kick.")
-sendToDiscord("**Observer** active (full). I will report:\n• **print** / warn / error\n• **GetService** (which services)\n• **Instance.new** (what it creates)\n• **Clone** / **Destroy**\n• **PivotTo** (model move)\n• **FireServer** / **InvokeServer** / **Invoke**\n• **Tween** + **Teleport** (SetPrimaryPartCFrame)\n• **HTTP**, **Kick**, **BindableEvent**\nRun your script now.")
+pcall(sendFirstScriptToDiscord)
+
+if metatableHooked then
+	logAction("Observer loaded (full). Metatable + print/warn/error + LogService.")
+	sendToDiscord("**Observer** ready (full mode). Remotes, Tween, Teleport, HTTP, print/warn/error, console errors → Discord. Run your script now.")
+else
+	logAction("Observer loaded (limited). No metatable hook (injector?). print/warn/error + LogService still work.")
+	sendToDiscord("**Observer** ready (limited mode – injector may not support getrawmetatable). I will still report: **print** / warn / error, **console errors**. Run your script now.")
+end
