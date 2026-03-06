@@ -15,6 +15,9 @@
   - HTTP calls, Kick, BindableEvent
 
   Run observer FIRST → then run the script you want to observe.
+
+  Delta injector: Inject this WHILE IN A GAME (after the game has loaded).
+  Discord needs game:GetService("HttpService"):PostAsync – we retry when game is ready.
 ==============================================================================
 ]]
 
@@ -70,11 +73,27 @@ end
 
 -- Ping Discord immediately
 local discordOk = trySendToDiscordRaw("**Observer** injecting... If you see this, the script started. Setting up hooks...")
+
+-- Delta / injectors that run before game is ready: retry when game appears (wait up to ~15s)
+if not discordOk and (not game or not pcall(function() game:GetService("HttpService") end)) then
+	pcall(function()
+		warn("[OBSERVER] Discord failed (no game yet?). Will retry when game is ready...")
+		local waitFn = wait or (type(task) == "table" and task.wait) or function() end
+		for i = 1, 30 do
+			waitFn(0.5)
+			if game and type(game.GetService) == "function" then
+				discordOk = trySendToDiscordRaw("**Observer** (Delta) started. If you see this, Discord is working.")
+				if discordOk then break end
+			end
+		end
+	end)
+end
+
 pcall(function()
 	if discordOk then
 		print("[OBSERVER] Discord ping sent. Check your webhook channel.")
 	else
-		warn("[OBSERVER] Discord ping FAILED. No game or request() in this injector – check injector output only.")
+		warn("[OBSERVER] Discord ping FAILED. For Delta: inject WHILE IN A GAME after it has loaded.")
 	end
 end)
 
